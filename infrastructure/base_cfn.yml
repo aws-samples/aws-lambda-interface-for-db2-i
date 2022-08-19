@@ -1,0 +1,60 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Base set of resources for the AS/400 interfacing infrastructure
+
+Parameters:
+  Project:
+    Type: String
+    Default: as400interface
+    MinLength: "3"
+    MaxLength: "15"
+    AllowedPattern: ^[a-z0-9]*$
+    Description: Project name. Must be lowercase and contain no special characters.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedPattern: ^[a-z0-9]*$
+    Description: Identifier for this environment (e.g. dev, test, uat, prod)
+
+Resources:
+  DB2InjectorImageRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${Project}-${Environment}-db2-injector"
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: Explicit name is required so repository can be referenced elsewhere
+          - id: W79
+            reason: Bug in cfn_nag, because ScanOnPush is indeed enabled
+
+  DB2Configuration:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${Project}-${Environment}-db2-configuration"
+      Description: Connection information for the DB2 instance
+      GenerateSecretString:
+        SecretStringTemplate: '{"hostname":"","database":"","schema":"","username":"","tls":true}'
+        GenerateStringKey: "password"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W77
+            reason: Default key is fine in this context.
+
+Outputs:
+  DB2ConfigurationArn:
+    Value: !Ref DB2Configuration

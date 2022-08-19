@@ -1,0 +1,152 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: Functions for the AS/400 interfacing infrastructure.
+
+Parameters:
+  Project:
+    Type: String
+    AllowedPattern: ^[a-z0-9]*$
+    Default: as400interface
+    Description: Project name. Must be lowercase and contain no special characters.
+    MinLength: "3"
+    MaxLength: "15"
+
+  Environment:
+    Type: String
+    AllowedPattern: ^[a-z0-9]*$
+    Default: dev
+    Description: Identifier for this environment (e.g. dev, test, uat, prod)
+
+  DB2ConfigurationArn:
+    Type: String
+    Description: ARN for secrets manager DB2 injector configuration
+
+  DB2VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to which the DB2 Injector Lambda should be connected
+
+  DB2SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets to which the DB2 Injector Lambda should be connected
+
+  DB2InjectorBaseImage:
+    Type: String
+    Default: "base-image-uri"
+    Description: Docker base image for DB2 Injector
+
+Resources:
+  DB2InjectorSecurityGroupDNSEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref DB2InjectorSecurityGroup
+      Description: Allow DNS egress
+      IpProtocol: udp
+      FromPort: 53
+      ToPort: 53
+      CidrIp: 0.0.0.0/0
+
+  DB2InjectorSecurityGroupHTTPSEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref DB2InjectorSecurityGroup
+      Description: Allow HTTPS egress
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+
+  DB2InjectorSecurityGroupDB2Egress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref DB2InjectorSecurityGroup
+      Description: Allow DB2 egress
+      IpProtocol: tcp
+      FromPort: 9471
+      ToPort: 9471
+      CidrIp: 0.0.0.0/0
+
+  DB2InjectorSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the DB2 Injector Lambda function
+      GroupName: !Sub ${Project}-db2-${Environment}
+      VpcId: !Ref DB2VpcId
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W5
+            reason: Open egress is by design.
+  DB2InjectorEventInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      DestinationConfig: {}
+      FunctionName:
+        Ref: DB2Injector
+      MaximumRetryAttempts: 0
+      Qualifier: $LATEST
+
+  DB2Injector:
+    Type: AWS::Serverless::Function
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: db2-injector
+      DockerBuildArgs:
+        BASE_IMAGE: !Ref DB2InjectorBaseImage
+      cfn_nag:
+        rules_to_suppress:
+          - id: W58
+            reason: IAM role with proper permissions are defined in iam.yaml.
+    Properties:
+      ImageUri: db2-injector
+      FunctionName: !Sub ${Project}-${Environment}-db2injector
+      Description: Carries out DB2 transactions
+      Environment:
+        Variables:
+          DB2_CONFIGURATION_ARN: !Ref DB2ConfigurationArn
+      MemorySize: 256
+      PackageType: Image
+      ReservedConcurrentExecutions: 1
+      Role: !GetAtt DB2InjectorRole.Arn
+      Tags:
+        Environment: !Ref Environment
+      Timeout: 30
+      VpcConfig:
+        SecurityGroupIds:
+          - Ref: DB2InjectorSecurityGroup
+        SubnetIds:
+          Ref: DB2SubnetIds
+
+  DB2InjectorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+            Effect: Allow
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: ConfigPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DB2ConfigurationArn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
