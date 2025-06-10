@@ -1,2 +1,2 @@
 aws_requests_auth==0.4.3
-requests==2.32.0
+requests==2.32.4
